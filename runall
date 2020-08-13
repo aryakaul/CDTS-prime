@@ -1,0 +1,116 @@
+#!/bin/bash
+set -e
+set -o pipefail
+
+usage() {
+    echo "
+    -o, --outdir                directory to dump output to
+    -c, --coverage              min coverage to filter variants for. default is 0.033
+    -d, --downloaddir           where gnomAD data will be downloaded
+    -w, --working               path to where the other scripts are. default is working directory
+    -k, --kmer                  size of kmers used to calculate CDTS. default is 7
+    -a, --allelefreqthresh      allele frequency threshold for autosomal regions. default is 0.0001
+    -ax, --allelefreqthreshX    allele frequency threshold for non-autosomal regions of chrX. default is 0.000075
+    -s, --sliding               num of bp to slide window. default is 10
+    -wi, --window               num of bp in window. default is 550
+    "
+}
+
+source /n/app/conda2/etc/profile.d/conda.sh
+conda activate mutts
+
+dl_gnomad() {
+    start=$(date +%s)
+    ./download_gnomadv3 -s "$1"
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+log() {
+    lcol='\033[1;33m' lcol2='\033[1;36m' lclr='\033[m'
+    printf '%b%s %b%s%b %s\n' \
+        "$lcol" "${3:-->}" "${lclr}${2:+$lcol2}" "$1" "$lclr" "$2" >&2
+}
+
+die() {
+    log "$1" "$2" "${3:-ERROR}"
+    exit 2
+}
+
+main() {
+    OUTDIR=""
+    COVERAGE=0.033
+    WD="."
+    KMER=7
+    AFTH=0.0001
+    AFTHX=0.000075
+    SLIDING=10
+    WINDOW=550
+    for i in "$@"; do
+    case $i in
+        -o|--outdir)
+        OUTDIR="$2"
+        shift
+        shift
+        ;;
+        -d|--downloaddir)
+        DOWNLOADDIR="$2"
+        shift
+        shift
+        ;;
+        -c|--coverage)
+        COVERAGE="$2"
+        shift
+        shift
+        ;;
+        -w|--working)
+        WD="$2"
+        shift
+        shift
+        ;;
+        -k|--kmer)
+        KMER="$2"
+        shift
+        shift
+        ;;
+        -a|--allelefreqthresh)
+        AFTH="$2"
+        shift
+        shift
+        ;;
+        -ax|--allelefreqthreshX)
+        AFTHX="$2"
+        shift
+        shift
+        ;;
+        -s|--sliding)
+        SLIDING="$2"
+        shift
+        shift
+        ;;
+        -wi|--window)
+        WINDOW="$2"
+        shift
+        shift
+        ;;
+        -h|--help)
+        usage
+        exit
+        ;;
+        *)
+        ;;
+    esac
+    done
+    [ -z $OUTDIR ] && die "No output directory specified!"
+    [ -z $DOWNLOADDIR ] && { log "No download directory specified... using output directory!"; DOWNLOADDIR="$OUTDIR"; }
+    seq 1 22 | cat - <(echo "X") > $OUTDIR/chromList.txt
+    log "Downloading gnomAD" "..." "STEP 1"
+    dl_gnomad $DOWNLOADDIR
+    log "SUCCESSFUL" "gnomAD downloaded" "STEP 1"
+    $WD/qc -o $OUTDIR -g $DOWNLOADDIR -c $COVERAGE -s $WD
+    $WD/kmer_calc -o $OUTDIR -k $KMER -w $WD
+    $WD/cdts_calc -o $OUTDIR -w $WD -a $AFTH -s $SLIDING -wi $WINDOW
+    log "SUCCESSFUL" "CDTS Prime Calculated" "STEPS 1-4 COMPLETE"
+}
+main "$@"

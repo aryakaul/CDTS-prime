@@ -1,0 +1,257 @@
+#!/bin/bash
+set -e
+
+extract_tolerance_score() {
+    start=$(date +%s)
+    log "Computing Tolerance Score"
+
+    awk -v OFS='\t' -F'\t' '{print $1, 0}' $1/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt \
+        > $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_autosomesAndPAR.txt
+    
+    afth=$3
+    for chroms in $(seq 1 22 | cat - <(echo "XPAR"))
+    do
+        
+        # first extract kmeric sequence from positions that vary with af above the specified threshold (but not coming from singletons)
+        [ ! -s $1/af/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz ] &&
+            unstarch $1/af/gnomad_PASS_SNV_chr${chroms}_af_highconf.starch \
+            | grep -v "sglt" \
+            | awk -v OFS='\t' -F'\t' -v af=${afth} '{if ($11>=af) print $0}' \
+            | bedmap --echo --echo-map-id --skip-unmapped - <(zcat $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz \
+                | sed 's/::/\t/g' \
+                | cut -f1,2,3,5) \
+            | sed 's/|/\t/g' \
+            | gzip - \
+            > $1/af/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz
+        
+        # extract counts of kmer that vary with an allelic frequency above the specified threshold
+        [ ! -s $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_chr${chroms}.txt ] &&
+            zcat $1/af/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz \
+            | cut -f 14 \
+            | python $5/countkmer.py 1 $2 \
+            > $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_chr${chroms}.txt
+        
+        # sum all kmer counts from autosomes and PAR
+        paste $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_autosomesAndPAR.txt \
+            $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_chr${chroms}.txt \
+            | awk -v OFS='\t' -F'\t' '{if ($1==$3) print $1, $2+$4}' \
+            > tmp.txt
+        mv tmp.txt $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_autosomesAndPAR.txt
+        log "Computed for chrom $chroms"
+    done
+   
+    # do the same thing for the X chromosome
+    afth=$4
+    [ ! -s $1/af/gnomad_PASS_SNV_chrXnotPAR_afabovethreshold_highconf.bed.gz ] &&
+        unstarch $1/af/gnomad_PASS_SNV_chrXnotPAR_af_highconf.starch \
+        | grep -v "sglt" \
+        | awk -v OFS='\t' -F'\t' -v af=${afth} '{if ($11>=af) print $0}' \
+        | bedmap --echo --echo-map-id --skip-unmapped - <(zcat $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chrXnotPAR.bed.gz \
+        | sed 's/::/\t/g' \
+        | cut -f1,2,3,5) \
+        | sed 's/|/\t/g' \
+        | gzip - \
+        > $1/af/gnomad_PASS_SNV_chrXnotPAR_afabovethreshold_highconf.bed.gz
+    
+    [ ! -s $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_chrXnotPAR.txt ] &&
+        zcat $1/af/gnomad_PASS_SNV_chrXnotPAR_afabovethreshold_highconf.bed.gz \
+        | cut -f 14 \
+        | python $5/countkmer.py 1 $2 \
+        > $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_chrXnotPAR.txt
+  
+    # make tolerance fraction. divide the obs count by the observed
+    mkdir -p $1/"$2"mermetrics/Dico
+    paste $1/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt \
+        $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_autosomesAndPAR.txt \
+    | awk -v OFS='\t' -F'\t' '{if ($1==$3) print $1, $4/$2}' \
+    > $1/"$2"mermetrics/Dico/TS_autosomesAndPAR.txt
+    
+    paste $1/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_chrXnotPAR.txt \
+        $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_chrXnotPAR.txt \
+    | awk -v OFS='\t' -F'\t' '{if ($1==$3 && $2!=0) {print $1, $4/$2} else {print $1, -1}}' \
+    > $1/"$2"mermetrics/Dico/TS_chrXnotPAR.txt
+    
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+place_tol_score() {
+    start=$(date +%s)
+    log "Placing tolerance score in genomic location"
+    for chroms in $(seq 1 22 | cat - <(echo "XPAR"))
+    do
+        log "Placing chrom $chroms"
+        if [ ! -s $1/genome/"$2"mer_TS_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz ]; then
+            zcat $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz \
+                | python $3/placeKmerToleranceScoreFromDicotoGenomicCoordinate_onlyACGT.py $1/"$2"mermetrics/Dico/TS_autosomesAndPAR.txt $2 \
+                | gzip - \
+                > $1/genome/"$2"mer_TS_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz &
+        else
+            continue
+        fi
+    done
+    wait
+    
+    [ ! -f $1/genome/"$2"mer_TS_hg38_highconf_gnomadupdate_chrXnotPAR.bed.gz ] &&
+        zcat $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chrXnotPAR.bed.gz \
+            | python $3/placeKmerToleranceScoreFromDicotoGenomicCoordinate_onlyACGT.py $1/"$2"mermetrics/Dico/TS_chrXnotPAR.txt $2 \
+            | gzip - \
+            > $1/genome/"$2"mer_TS_hg38_highconf_gnomadupdate_chrXnotPAR.bed.gz
+
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+generate_obsexpected() {
+    start=$(date +%s)
+    log "Generating window"
+    mkdir -p $1/CDTS
+    window=$3
+    sliding=$4
+    leftright_gap=$(($window/2))
+    while read -r chroms; do
+        bluntchr=`echo $chroms | sed -e 's/PAR//g' -e 's/not//g'`
+        log "Computing expected for chrom $chroms"
+        if [ ! -s $1/CDTS/CDTS_diff_chr${chroms}.bed.gz ]; then
+        grep -w ${bluntchr} $1/genome/chrLength_hg38.txt \
+            | awk -v OFS='\t' -F'\t' -v sld=$sliding -v wd=$window '{for(i=0; i<=($2); i=i+sld) {stt=i;end=i+wd; print $1, stt,end}}' \
+            | bedmap --echo --bases --sum - <(zcat $1/genome/"$2"mer_TS_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz) \
+            | sed 's/|/\t/g' \
+            | awk -v OFS='\t' -F'\t' -v wd=$window '{if ($4 >= wd*0.9) print $0}' \
+            | bedmap --echo --count - <(zcat $1/af/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz) \
+            | sed 's/|/\t/g' \
+            | awk -v OFS='\t' -F'\t' -v g="$leftright_gap" '{print $1, $2+g-5, $3-g-5, $6, $5, $6-$5}' \
+            | gzip - \
+            > $1/CDTS/CDTS_diff_chr${chroms}.bed.gz &
+        else
+            continue
+        fi
+    done < $1/chromList_PARsplit.txt
+    wait
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+create_percentile_bins() {
+    start=$(date +%s)
+    log "Creating percentile bins"
+    nb=$(($(zcat $1/CDTS/CDTS_diff_chr*.bed.gz | wc -l)/100))
+    mkdir -p $1/CDTS/split/diff
+    zcat $1/CDTS/CDTS_diff_chr*.bed.gz > $1/CDTS/split/genome_CDTS.bed
+    sort -k6,6g -k4,4n --temporary-directory=$1/CDTS/split/diff $1/CDTS/split/genome_CDTS.bed \
+        | split -l $nb --numeric-suffixes=1 --suffix-length=3 - $1/CDTS/split/diff/CDTS_diff_perc.bed.
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+merge() {
+    start=$(date +%s)
+    log "Merging files"
+    log "Total entries in CDTS --> $nb"
+    mkdir -p $1/CDTS/diff
+    rm -f $1/CDTS/diff/CDTS_diff_perc.bed
+    touch $1/CDTS/diff/CDTS_diff_perc.bed
+    i=1
+    for files in $1/CDTS/split/diff/CDTS_diff_perc.bed.*; do
+        cat $files \
+            | awk -v OFS='\t' -F'\t' -v ivar=${i} -v nbLine=${nb} '{printf "%s\t%i\t%i\t%s\t%s\t%s\t%.6f\n", $1, $2, $3, $4, $5, $6, ivar-1+(NR/nbLine)}' \
+            >> $1/CDTS/diff/CDTS_diff_perc.bed
+        i=$((${i}+1))
+    done 
+    
+    log "Sorting bed file"
+    sort-bed $1/CDTS/diff/CDTS_diff_perc.bed --max-mem 8G | starch - > $1/CDTS/diff/CDTS_diff_perc_coordsorted_gnomADv3_hg38.starch
+
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+log() {
+    lcol='\033[1;33m' lcol2='\033[1;36m' lclr='\033[m'
+    printf '%b%s %b%s%b %s\n' \
+        "$lcol" "${3:-->}" "${lclr}${2:+$lcol2}" "$1" "$lclr" "$2" >&2
+}
+
+die() {
+    log "$1" "$2" "${3:-ERROR}"
+    exit 2
+}
+
+main() {
+    OUTDIR=""
+    KMER=7
+    WD="."
+    AFTH=0.0001
+    AFTHX=0.000075
+    SLIDING=10
+    WINDOW=550
+    for i in "$@"; do
+    case $i in
+        -o|--outdir)
+        OUTDIR="$2"
+        shift
+        shift
+        ;;
+        -w|--working)
+        WD="$2"
+        shift
+        shift
+        ;;
+        -k|--kmer)
+        KMER="$2"
+        shift
+        shift
+        ;;
+        -a|--allelefreqthresh)
+        AFTH="$2"
+        shift
+        shift
+        ;;
+        -ax|--allelefreqthreshX)
+        AFTHX="$2"
+        shift
+        shift
+        ;;
+        -s|--sliding)
+        SLIDING="$2"
+        shift
+        shift
+        ;;
+        -wi|--window)
+        WINDOW="$2"
+        shift
+        shift
+        ;;
+        -h|--help)
+        usage
+        exit
+        ;;
+        *)
+        ;;
+    esac
+    done
+    
+    log "Extracting CDTS score" "..." "STEP 4"
+    
+    log "Computing tolerance score" "..." "STEP 4A"
+    extract_tolerance_score $OUTDIR $KMER $AFTH $AFTHX $WD && log "SUCCESSFUL" "Tolerance score calculated" "STEP 4A" || die "Step 4A failed"
+    
+    log "Placing tolerance score" "..." "STEP 4B"
+    place_tol_score $OUTDIR $KMER $WD && log "SUCCESSFUL" "Tolerance score placed" "STEP 4B" || die "Step 4B failed"
+    
+    log "Computing observed and expected values" "..." "STEP 4C"
+    generate_obsexpected $OUTDIR $KMER $WINDOW $SLIDING && log "SUCCESSFUL" "Observed and Expected computed" "STEP 4C" || die "Step 4C failed"
+    
+    log "Create percentile bins" "..." "STEP 4D"
+    create_percentile_bins $OUTDIR && log "SUCCESSFUL" "Percentile bins created" "STEP 4D" || die "Step 4D failed"
+    
+    log "Merge all bins" "..." "STEP 4E"
+    merge $OUTDIR && log "SUCCESSFUL" "Bins merged" "STEP 4E" || die "Step 4E failed"
+}
+
+main "$@"

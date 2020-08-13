@@ -1,0 +1,49 @@
+#!/bin/bash
+
+dl_gnomad() {
+    mkdir -p $1/logs/gsutil
+    mkdir -p $1/vcf
+    mkdir -p $1/coverage
+    seq 1 22 | cat - <(echo "X") > $1/chromList.txt
+    while read -r ch; do 
+        gsutil -m cp -n -L $1/logs/gsutil/gs_vcf_chr.log -P -r gs://gnomad-public/release/3.0/vcf/genomes/gnomad.genomes.r3.0.sites.chr"$ch".vcf.bgz $1/vcf || die "Downloading chrom $ch VCF failed"
+        log "Download Successful" "Chromosome $ch VCF"
+        gsutil -m cp -n -L $1/logs/gsutil/gs_vcf_chr.log -P -r gs://gnomad-public/release/3.0/vcf/genomes/gnomad.genomes.r3.0.sites.chr"$ch".vcf.bgz.tbi $1/vcf || die "Downloading chrom $ch VCF index failed"
+        log "Download Successful" "Chromosome $ch VCF Index"
+    done<"$1"/chromList.txt
+    gsutil -m cp -n -L $1/logs/gsutil/gs_coverage.log -P -r gs://gnomad-public/release/3.0/coverage/genomes/gnomad.genomes.r3.0.coverage.summary.tsv.bgz $1/coverage || die "downloading coverage failed"
+    log "Download Successful" "Coverage"
+}
+
+log() {
+    lcol='\033[1;33m' lcol2='\033[1;36m' lclr='\033[m'
+    printf '%b%s %b%s%b %s\n' \
+        "$lcol" "${3:-->}" "${lclr}${2:+$lcol2}" "$1" "$lclr" "$2" >&2
+}
+
+die() {
+    log "$1" "$2" "${3:-ERROR}"
+    exit 1
+}
+
+main() {
+    SCRATCH=""
+    for i in "$@"; do
+    case $i in
+        -s|--scratch)
+        SCRATCH="$2"
+        shift
+        shift
+        ;;
+        -h|--help)
+        usage
+        exit
+        ;;
+        *)
+        ;;
+    esac
+    done
+    [ -z $SCRATCH ] && die "No scratch directory specified (use -s!)"
+    dl_gnomad "$SCRATCH"
+}
+main "$@"
