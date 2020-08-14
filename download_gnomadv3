@@ -6,12 +6,18 @@ dl_gnomad() {
     mkdir -p $1/coverage
     seq 1 22 | cat - <(echo "X") > $1/chromList.txt
     while read -r ch; do 
-        gsutil -m cp -n -L $1/logs/gsutil/gs_vcf_chr.log -P -r gs://gnomad-public/release/3.0/vcf/genomes/gnomad.genomes.r3.0.sites.chr"$ch".vcf.bgz $1/vcf || die "Downloading chrom $ch VCF failed"
+        if [ ! -s $1/vcf/gnomad.genomes.r3.0.sites.chr"$ch".vcf.bgz ]; then
+            gsutil -m cp -n -L $1/logs/gsutil/gs_vcf_chr.log -P -r gs://gnomad-public/release/3.0/vcf/genomes/gnomad.genomes.r3.0.sites.chr"$ch".vcf.bgz $1/vcf || die "Downloading chrom $ch VCF failed"
+        fi
         log "Download Successful" "Chromosome $ch VCF"
-        gsutil -m cp -n -L $1/logs/gsutil/gs_vcf_chr.log -P -r gs://gnomad-public/release/3.0/vcf/genomes/gnomad.genomes.r3.0.sites.chr"$ch".vcf.bgz.tbi $1/vcf || die "Downloading chrom $ch VCF index failed"
+        if [ ! -s $1/vcf/gnomad.genomes.r3.0.sites.chr"$ch".vcf.bgz.tbi ]; then
+            gsutil -m cp -n -L $1/logs/gsutil/gs_vcf_chr.log -P -r gs://gnomad-public/release/3.0/vcf/genomes/gnomad.genomes.r3.0.sites.chr"$ch".vcf.bgz.tbi $1/vcf || die "Downloading chrom $ch VCF index failed"
+        fi
         log "Download Successful" "Chromosome $ch VCF Index"
     done<"$1"/chromList.txt
-    gsutil -m cp -n -L $1/logs/gsutil/gs_coverage.log -P -r gs://gnomad-public/release/3.0/coverage/genomes/gnomad.genomes.r3.0.coverage.summary.tsv.bgz $1/coverage || die "downloading coverage failed"
+    if [ ! -s $1/coverage/gnomad.genomes.r3.0.coverage.summary.tsv.bgz ]; then 
+        gsutil -m cp -n -L $1/logs/gsutil/gs_coverage.log -P -r gs://gnomad-public/release/3.0/coverage/genomes/gnomad.genomes.r3.0.coverage.summary.tsv.bgz $1/coverage || die "downloading coverage failed"
+    fi
     log "Download Successful" "Coverage"
 }
 

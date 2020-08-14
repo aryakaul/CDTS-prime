@@ -47,6 +47,7 @@ main() {
     AFTHX=0.000075
     SLIDING=10
     WINDOW=550
+    ANNOTDIR=""
     for i in "$@"; do
     case $i in
         -o|--outdir)
@@ -94,6 +95,11 @@ main() {
         shift
         shift
         ;;
+        -a|--annotations)
+        ANNOTDIR="$2"
+        shift
+        shift
+        ;;
         -h|--help)
         usage
         exit
@@ -109,7 +115,7 @@ main() {
     dl_gnomad $DOWNLOADDIR
     log "SUCCESSFUL" "gnomAD downloaded" "STEP 1"
     $WD/qc -o $OUTDIR -g $DOWNLOADDIR -c $COVERAGE -s $WD
-    $WD/kmer_calc -o $OUTDIR -k $KMER -w $WD
+    $WD/kmer_calc -o $OUTDIR -k $KMER -w $WD -a $ANNOTDIR
     $WD/cdts_calc -o $OUTDIR -w $WD -a $AFTH -s $SLIDING -wi $WINDOW
     log "SUCCESSFUL" "CDTS Prime Calculated" "STEPS 1-4 COMPLETE"
 }

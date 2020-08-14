@@ -70,7 +70,7 @@ extract_highconf_lowcov_regions() {
     
     end=$(date +%s)
     runtime=$((end-start))
-    log "Time Taken" "$runtime seconds"
+    log "Time Taken" "$(($runtime)) minutes"
 }
 
 
@@ -203,7 +203,7 @@ update_allele() {
     wait
     end=$(date +%s)
     runtime=$((end-start))
-    log "Time Taken" "$runtime seconds"
+    log "Time Taken" "$(($runtime/60)) minutes"
 }
 
 log() {
@@ -270,7 +270,5 @@ main() {
     update_allele $OUTDIR && log "SUCCESSFUL" "Reference updated." "STEP 2E" || die "Step 2E failed"
     
     log "QC Complete" "..." "STEP 2"
-    
-    
 }
 main "$@"

@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+set -o pipefail
 
 get_kmer() {
     start=$(date +%s)
@@ -91,22 +92,73 @@ get_kmer() {
     log "Time Taken" "$runtime minutes"
 }
 
-extract_kmer_counts() {
+make_annot() {
+    annot_dir=$1
+    outdir=$2
+    start=$(date +%s)
+    for annotations in $annot_dir/*.starch; do
+        clean_annot=$(basename $annotations .starch)
+        mkdir -p $outdir/annotations/$clean_annot
+        while read -r chroms; do 
+            log "Splitting chr$chroms for $clean_annot"
+            if [ ! -s $outdir/annotations/$clean_annot/chr"$chroms".starch ]; then
+                unstarch chr"$chroms" $annotations \
+                    | sed 's/^chr//g' \
+                    | starch - \
+                    > $outdir/annotations/$clean_annot/chr"$chroms".starch &
+            fi
+        done < $outdir/chromList.txt
+        wait
+        log "All annotations split for $clean_annot"
+    done
+    wait
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+extract_kmer_counts_annotaware() {
     start=$(date +%s)
     mkdir -p "$1"/"$2"mermetrics
-    while read -r chroms; do
-        log "Extracting kmer counts for chr$chroms"
-        if [ ! -s "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt ]
-        then
-            zcat $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz \
+    ctr=0
+    for annotations in $1/annotations/*; do
+        clean_annot=$(basename $annotations)
+        log "Analyzing $clean_annot"
+        mkdir -p "$1"/"$2"mermetrics/annotations/$clean_annot
+        while read -r chroms; do
+            log "Extracting kmer counts for chr$chroms"
+            if [[ $chroms == "XPAR" || $chroms == "XnotPAR" ]]; then
+                bedops --intersect $annotations/chrX.starch \
+                    <(zcat $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz \
+                    | awk -F'\t' -v OFS='\t' -v k=$(($2/2)) '{print $1, $2-k, $2+k}' \
+                    | sort-bed - ) \
                 | cut -f 4 \
                 | python $3/countkmer.py 1 $2 \
-                > "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt &
-        else
-            continue
-        fi
-    done < $1/chromList_PARsplit.txt
+                > "$1"/"$2"mermetrics/annotations/"$clean_annot"/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt &
+                [[ $ctr < 5 ]] && ctr=$((ctr+1)) || { wait; ctr=0; }
+            else
+                if [ ! -s "$1"/"$2"mermetrics/$clean_annot/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt ]
+                then
+                    #TODO test if I should use merge or intersect here?
+                    #TODO test if I should use whole range or 1bp range here?
+                    bedops --intersect $annotations/chr"$chroms".starch \
+                        <(zcat $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz \
+                        | awk -F'\t' -v OFS='\t' -v k=$(($2/2)) '{print $1, $2-k, $2+k, $4}' \
+                        | sort-bed - ) \
+                    | cut -f 4 \
+                    | python $3/countkmer.py 1 $2 \
+                    > "$1"/"$2"mermetrics/annotations/"$clean_annot"/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt &
+                    [[ $ctr < 5 ]] && ctr=$((ctr+1)) || { wait; ctr=0; }
+                else
+                    continue
+                fi
+            fi
+        done < $1/chromList_PARsplit.txt
+        wait
+        log "kmer counts extracted for annotation $clean_annot"
+    done
     wait
+    exit
 
     cp "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_chrXPAR.txt \
         "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt
@@ -136,6 +188,7 @@ main() {
     OUTDIR=""
     KMER=7
     WD="."
+    ANNOTDIR=""
     for i in "$@"; do
     case $i in
         -o|--outdir)
@@ -153,6 +206,11 @@ main() {
         shift
         shift
         ;;
+        -a|--annotations)
+        ANNOTDIR="$2"
+        shift
+        shift
+        ;;
         -h|--help)
         usage
         exit
@@ -164,12 +222,17 @@ main() {
     
     log "Extracting Kmers" "..." "STEP 3"
     [[ $(($KMER%2)) == 0 ]] && die "Kmer value selected is not odd!" 
+
+    [ -z $ANNOTDIR ] && die "Annotation directory not specified!"
     
     log "Computing kmers for each position" "..." "STEP 3A"
     get_kmer $OUTDIR $KMER && log "SUCCESSFUL" "Kmer computed for each position" "STEP 3A" || die "Step 3A failed"
     
-    log "Extract kmer metrics" "..." "STEP 3B"
-    extract_kmer_counts $OUTDIR $KMER $WD && log "SUCCESSFUL" "Kmer metrics computed" "STEP 3B" || die "Step 3B failed"
+    log "Splitting annotations" "..." "STEP 3B"
+    make_annot $ANNOTDIR $OUTDIR && log "SUCCESSFUL" "Annotations successfully split" "STEP 3B" || die "Step 3B failed"
+    
+    log "Extracting kmer metrics" "..." "STEP 3C"
+    extract_kmer_counts_annotaware $OUTDIR $KMER $WD && log "SUCCESSFUL" "Kmer metrics computed" "STEP 3B" || die "Step 3B failed"
 }
 
 main "$@"
