@@ -1,0 +1,27 @@
+#!/bin/bash
+source /n/app/conda2/etc/profile.d/conda.sh
+conda activate mutts
+
+annotations=$1
+chroms=$2
+outdir=$3
+kmer=$4
+wd=$5
+clean_annot=$6
+
+if [ ! -s "$outdir"/"$kmer"mermetrics/"$kmer"mer_highconf_gnomadupdate_hg38_chr"$chroms".starch ]; then
+    if [[ $chroms == XPAR || $chroms == XnotPAR ]]; then
+        zcat $outdir/genome/"$kmer"mer_hg38_highconf_gnomadupdate_chrX.bed.gz | awk -F'\t' -v OFS='\t' -v k=$(($kmer/2)) '{print $1, $2-k, $2+k, $4}' | sort-bed -  | starch - > "$outdir"/"$kmer"metrics/"$kmer"mer_highconf_gnomadupdate_hg38_chr"$chroms".starch
+    else
+        zcat $outdir/genome/"$kmer"mer_hg38_highconf_gnomadupdate_chr"$chroms".bed.gz | awk -F'\t' -v OFS='\t' -v k=$(($kmer/2)) '{print $1, $2-k, $2+k, $4}' | sort-bed -  | starch - > "$outdir"/"$kmer"metrics/"$kmer"mer_highconf_gnomadupdate_hg38_chr"$chroms".starch
+    fi
+    echo "done!"
+fi 
+if [ ! -s "$outdir"/"$kmer"mermetrics/annotations/"$clean_annot"/"$kmer"mer_highconf_gnomadupdate_hg38_chr"$chroms".txt ]; then
+    if [[ $chroms == XPAR || $chroms == XnotPAR ]]; then
+        bedops -e 1 "$outdir"/"$kmer"mermetrics/"$kmer"mer_highconf_gnomadupdate_hg38_chr"$chroms".starch $annotations/chrX.starch  | cut -f 4 | python $wd/countkmer.py 1 $kmer > "$outdir"/"$kmer"mermetrics/annotations/"$clean_annot"/"$kmer"mer_highconf_gnomadupdate_hg38_chr"$chroms".txt
+    else
+    bedops -e 1 "$outdir"/"$kmer"mermetrics/"$kmer"mer_highconf_gnomadupdate_hg38_chr"$chroms".starch $annotations/chr"$chroms".starch  | cut -f 4 | python $wd/countkmer.py 1 $kmer > "$outdir"/"$kmer"mermetrics/annotations/"$clean_annot"/"$kmer"mer_highconf_gnomadupdate_hg38_chr"$chroms".txt
+    fi
+fi
+echo "done"

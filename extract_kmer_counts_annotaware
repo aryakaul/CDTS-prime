@@ -1,0 +1,100 @@
+#!/bin/bash
+set -e
+set -o pipefail
+
+make_annot() {
+    annot_dir=$1
+    outdir=$2
+    start=$(date +%s)
+    for annotations in $annot_dir/*.starch; do
+        clean_annot=$(basename $annotations .starch)
+        mkdir -p $outdir/annotations/$clean_annot
+        while read -r chroms; do 
+            log "Splitting chr$chroms for $clean_annot"
+            if [ ! -s $outdir/annotations/$clean_annot/chr"$chroms".starch ]; then
+                unstarch "$chroms" $annotations \
+                    | starch - \
+                    > $outdir/annotations/$clean_annot/chr"$chroms".starch &
+            fi
+        done < $outdir/chromList.txt
+        wait
+        log "All annotations split for $clean_annot"
+    done
+    wait
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+extract_kmer_counts_annotaware() {
+    start=$(date +%s)
+    mkdir -p "$1"/"$2"mermetrics
+    for annotations in $1/annotations/*; do
+        clean_annot=$(basename $annotations)
+        log "Analyzing $clean_annot"
+        mkdir -p "$1"/"$2"mermetrics/annotations/$clean_annot
+        while read -r chroms; do
+            log "Extracting kmer counts for chr$chroms"
+            if [ ! -s "$1"/"$2"mermetrics/annotations/$clean_annot/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt ]
+            then
+                sbatch -p short -t 0-00:40 --mem=16G $3/run_job $annotations $chroms $1 $2 $3 $clean_annot
+            else
+                continue
+            fi
+        done < $1/chromList_PARsplit.txt
+    done
+}
+
+log() {
+    lcol='\033[1;33m' lcol2='\033[1;36m' lclr='\033[m'
+    printf '%b%s %b%s%b %s\n' \
+        "$lcol" "${3:-->}" "${lclr}${2:+$lcol2}" "$1" "$lclr" "$2" >&2
+}
+
+die() {
+    log "$1" "$2" "${3:-ERROR}"
+    exit 2
+}
+
+main() {
+    OUTDIR=""
+    KMER=7
+    WD="."
+    ANNOTDIR=""
+    for i in "$@"; do
+    case $i in
+        -o|--outdir)
+        OUTDIR="$2"
+        shift
+        shift
+        ;;
+        -w|--working)
+        WD="$2"
+        shift
+        shift
+        ;;
+        -k|--kmer)
+        KMER="$2"
+        shift
+        shift
+        ;;
+        -a|--annotations)
+        ANNOTDIR="$2"
+        shift
+        shift
+        ;;
+        -h|--help)
+        usage
+        exit
+        ;;
+        *)
+        ;;
+    esac
+    done
+    log "Splitting annotations" "..." "STEP 3B"
+    make_annot $ANNOTDIR $OUTDIR && log "SUCCESSFUL" "Annotations successfully split" "STEP 3B" || die "Step 3B failed"
+    
+    log "Extracting kmer metrics" "..." "STEP 3C"
+    extract_kmer_counts_annotaware $OUTDIR $KMER $WD && log "SUCCESSFUL" "Kmer metrics computed" "STEP 3B" || die "Step 3B failed"
+}
+main "$@"

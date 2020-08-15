@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
+set -o pipefail
 
-extract_tolerance_score() {
+extract_tolerance_score_annotaware() {
     start=$(date +%s)
     log "Computing Tolerance Score"
 
@@ -76,101 +77,6 @@ extract_tolerance_score() {
     log "Time Taken" "$runtime minutes"
 }
 
-place_tol_score() {
-    start=$(date +%s)
-    log "Placing tolerance score in genomic location"
-    for chroms in $(seq 1 22 | cat - <(echo "XPAR"))
-    do
-        log "Placing chrom $chroms"
-        if [ ! -s $1/genome/"$2"mer_TS_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz ]; then
-            zcat $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz \
-                | python $3/placeKmerToleranceScoreFromDicotoGenomicCoordinate_onlyACGT.py $1/"$2"mermetrics/Dico/TS_autosomesAndPAR.txt $2 \
-                | gzip - \
-                > $1/genome/"$2"mer_TS_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz &
-        else
-            continue
-        fi
-    done
-    wait
-    
-    [ ! -f $1/genome/"$2"mer_TS_hg38_highconf_gnomadupdate_chrXnotPAR.bed.gz ] &&
-        zcat $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chrXnotPAR.bed.gz \
-            | python $3/placeKmerToleranceScoreFromDicotoGenomicCoordinate_onlyACGT.py $1/"$2"mermetrics/Dico/TS_chrXnotPAR.txt $2 \
-            | gzip - \
-            > $1/genome/"$2"mer_TS_hg38_highconf_gnomadupdate_chrXnotPAR.bed.gz
-
-    end=$(date +%s)
-    runtime=$(((end-start)/60))
-    log "Time Taken" "$runtime minutes"
-}
-
-generate_obsexpected() {
-    start=$(date +%s)
-    log "Generating window"
-    mkdir -p $1/CDTS
-    window=$3
-    sliding=$4
-    leftright_gap=$(($window/2))
-    while read -r chroms; do
-        bluntchr=`echo $chroms | sed -e 's/PAR//g' -e 's/not//g'`
-        log "Computing expected for chrom $chroms"
-        if [ ! -s $1/CDTS/CDTS_diff_chr${chroms}.bed.gz ]; then
-        grep -w ${bluntchr} $1/genome/chrLength_hg38.txt \
-            | awk -v OFS='\t' -F'\t' -v sld=$sliding -v wd=$window '{for(i=0; i<=($2); i=i+sld) {stt=i;end=i+wd; print $1, stt,end}}' \
-            | bedmap --echo --bases --sum - <(zcat $1/genome/"$2"mer_TS_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz) \
-            | sed 's/|/\t/g' \
-            | awk -v OFS='\t' -F'\t' -v wd=$window '{if ($4 >= wd*0.9) print $0}' \
-            | bedmap --echo --count - <(zcat $1/af/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz) \
-            | sed 's/|/\t/g' \
-            | awk -v OFS='\t' -F'\t' -v g="$leftright_gap" '{print $1, $2+g-5, $3-g-5, $6, $5, $6-$5}' \ #5 because we're always computing score for 10 bp
-            | gzip - \
-            > $1/CDTS/CDTS_diff_chr${chroms}.bed.gz &
-        else
-            continue
-        fi
-    done < $1/chromList_PARsplit.txt
-    wait
-    end=$(date +%s)
-    runtime=$(((end-start)/60))
-    log "Time Taken" "$runtime minutes"
-}
-
-create_percentile_bins() {
-    start=$(date +%s)
-    log "Creating percentile bins"
-    nb=$(($(zcat $1/CDTS/CDTS_diff_chr*.bed.gz | wc -l)/100))
-    mkdir -p $1/CDTS/split/diff
-    zcat $1/CDTS/CDTS_diff_chr*.bed.gz > $1/CDTS/split/genome_CDTS.bed
-    sort -k6,6g -k4,4n --temporary-directory=$1/CDTS/split/diff $1/CDTS/split/genome_CDTS.bed \
-        | split -l $nb --numeric-suffixes=1 --suffix-length=3 - $1/CDTS/split/diff/CDTS_diff_perc.bed.
-    end=$(date +%s)
-    runtime=$(((end-start)/60))
-    log "Time Taken" "$runtime minutes"
-}
-
-merge() {
-    start=$(date +%s)
-    log "Merging files"
-    log "Total entries in CDTS --> $nb"
-    mkdir -p $1/CDTS/diff
-    rm -f $1/CDTS/diff/CDTS_diff_perc.bed
-    touch $1/CDTS/diff/CDTS_diff_perc.bed
-    i=1
-    for files in $1/CDTS/split/diff/CDTS_diff_perc.bed.*; do
-        cat $files \
-            | awk -v OFS='\t' -F'\t' -v ivar=${i} -v nbLine=${nb} '{printf "%s\t%i\t%i\t%s\t%s\t%s\t%.6f\n", $1, $2, $3, $4, $5, $6, ivar-1+(NR/nbLine)}' \
-            >> $1/CDTS/diff/CDTS_diff_perc.bed
-        i=$((${i}+1))
-    done 
-    
-    log "Sorting bed file"
-    sort-bed $1/CDTS/diff/CDTS_diff_perc.bed --max-mem 8G | starch - > $1/CDTS/diff/CDTS_diff_perc_coordsorted_gnomADv3_hg38.starch
-
-    end=$(date +%s)
-    runtime=$(((end-start)/60))
-    log "Time Taken" "$runtime minutes"
-}
-
 log() {
     lcol='\033[1;33m' lcol2='\033[1;36m' lclr='\033[m'
     printf '%b%s %b%s%b %s\n' \
@@ -235,23 +141,6 @@ main() {
         ;;
     esac
     done
-    
-    log "Extracting CDTS score" "..." "STEP 4"
-    
-    log "Computing tolerance score" "..." "STEP 4A"
     extract_tolerance_score $OUTDIR $KMER $AFTH $AFTHX $WD && log "SUCCESSFUL" "Tolerance score calculated" "STEP 4A" || die "Step 4A failed"
-    
-    log "Placing tolerance score" "..." "STEP 4B"
-    place_tol_score $OUTDIR $KMER $WD && log "SUCCESSFUL" "Tolerance score placed" "STEP 4B" || die "Step 4B failed"
-    
-    log "Computing observed and expected values" "..." "STEP 4C"
-    generate_obsexpected $OUTDIR $KMER $WINDOW $SLIDING && log "SUCCESSFUL" "Observed and Expected computed" "STEP 4C" || die "Step 4C failed"
-    
-    log "Create percentile bins" "..." "STEP 4D"
-    create_percentile_bins $OUTDIR && log "SUCCESSFUL" "Percentile bins created" "STEP 4D" || die "Step 4D failed"
-    
-    log "Merge all bins" "..." "STEP 4E"
-    merge $OUTDIR && log "SUCCESSFUL" "Bins merged" "STEP 4E" || die "Step 4E failed"
 }
-
 main "$@"
