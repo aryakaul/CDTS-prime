@@ -1,0 +1,51 @@
+#!/bin/bash
+set -e
+set -o pipefail
+
+source /n/app/conda2/etc/profile.d/conda.sh
+conda activate mutts
+
+annotations=$1
+chroms=$2
+outdir=$3
+kmer=$4
+wd=$5
+clean_annot=$6
+afth=$7
+
+start=$(date +%s)
+if [ ! -s "$outdir"/"$kmer"mermetrics/annotations/"$clean_annot"/"$kmer"mer_highconf_gnomadupdate_hg38_chr"$chroms".txt ]; then
+    #bedops -e 1 <(zcat $outdir/genome/"$kmer"mer_hg38_highconf_gnomadupdate_chr"$chroms".bed.gz | sed 's/::/\t/g' | cut -f1,2,3,5) $annotations/chr"$chroms".starch  \
+    bedops -e 100% <(zcat $outdir/genome/"$kmer"mer_hg38_highconf_gnomadupdate_chr"$chroms".bed.gz | sed 's/::/\t/g' | cut -f1,2,3,5) $annotations/chr"$chroms".starch  \
+        | cut -f 4 \
+        | python $wd/countkmer.py 1 $kmer \
+        > "$outdir"/"$kmer"mermetrics/annotations/"$clean_annot"/"$kmer"mer_highconf_gnomadupdate_hg38_chr"$chroms".txt
+fi
+end=$(date +%s)
+runtime=$(((end-start)/60))
+echo "Calculated exp. hept. distributions for $clean_annot and $chroms"
+echo "Took $runtime minutes"
+
+start=$(date +%s)
+mkdir -p "$outdir"/af/annotations/$clean_annot
+[ ! -s "$outdir"/af/annotations/$clean_annot/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz ] && 
+    unstarch $outdir/af/gnomad_PASS_SNV_chr${chroms}_af_highconf.starch \
+        | grep -v "sglt" \
+        | awk -v OFS='\t' -F'\t' -v af=${afth} '{if ($11>=af){print $0}}' \
+        | bedmap --echo --echo-map-id --skip-unmapped - \
+            <(bedops -e 100% \
+                <(zcat $outdir/genome/"$kmer"mer_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz \
+                | sed 's/::/\t/g' | cut -f1,2,3,5) \
+            $annotations/chr${chroms}.starch) \
+        | sed 's/|/\t/g' \
+        | gzip - \
+        > "$outdir"/af/annotations/$clean_annot/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz 
+
+[ ! -s "$outdir"/"$kmer"mermetrics/annotations/$clean_annot/"$kmer"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_chr${chroms}.txt ] && 
+    zcat $outdir/af/annotations/$clean_annot/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz \
+        | cut -f14 \
+        | python $wd/countkmer.py 1 $kmer \
+        > "$outdir"/"$kmer"mermetrics/annotations/$clean_annot/"$kmer"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_chr${chroms}.txt  
+echo "Calculated obs. hept. distributions for $clean_annot and $chroms"
+runtime=$(((end-start)/60))
+echo "Took $runtime minutes"

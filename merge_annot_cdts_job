@@ -1,0 +1,15 @@
+#!/bin/bash
+set -e
+set -o pipefail
+
+source /n/app/conda2/etc/profile.d/conda.sh
+conda activate mutts
+
+outdir=$1
+chroms=$2
+wd=$3
+
+find $outdir/CDTS -name "CDTS_diff_chr${chroms}.starch" \
+    | xargs bedops -u \
+    | python $wd/calc_mean.py \
+    > $outdir/CDTS/CDTS_diff_annots/CDTS_diff_chr${chroms}.bed

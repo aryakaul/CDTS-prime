@@ -1,0 +1,26 @@
+#!/bin/bash
+set -e
+set -o pipefail
+
+source /n/app/conda2/etc/profile.d/conda.sh
+conda activate mutts
+
+outdir=$1
+kmer=$2
+chroms=$3
+annotation=$4
+wd=$5
+clean_annot=$6
+
+start=$(date +%s)
+bedops -e 1 <(zcat $outdir/genome/"$kmer"mer_hg38_highconf_gnomadupdate_chr"$chroms".bed.gz \
+        | sed 's/::/\t/g' | cut -f1,2,3,5) \
+    $annotation/chr"$chroms".starch \
+    | python $wd/placeKmerToleranceScoreFromDicotoGenomicCoordinate_onlyACGT.py \
+                    $outdir/"$kmer"mermetrics/annotations/$clean_annot/Dico/TS_autosomes.txt $kmer \
+    | starch - \
+    > $1/genome/annotations/$clean_annot/"$kmer"mer_TS_hg38_highconf_gnomadupdate_chr${chroms}.starch
+end=$(date +%s)
+runtime=$(((end-start)/60))
+echo "Placed tolerance score for $clean_annot and $chroms"
+echo "Took $runtime minutes"

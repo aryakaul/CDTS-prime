@@ -1,0 +1,29 @@
+#!/bin/bash
+set -e
+set -o pipefail
+
+source /n/app/conda2/etc/profile.d/conda.sh
+conda activate mutts
+
+outdir=$1
+kmer=$2
+chroms=$3
+sliding=$4
+window=$5
+clean_annot=$6
+leftright_gap=$(($window/2))
+start=$(date +%s)
+grep -w ${chroms} $outdir/genome/chrLength_hg38.txt \
+    | awk -v OFS='\t' -F'\t' -v sld=$sliding -v wd=$window '{for(i=0; i<=($2); i=i+sld) {stt=i;end=i+wd; print $1, stt,end}}' \
+    | bedmap --delim '\t' --echo --bases --sum - \
+        $outdir/genome/annotations/$clean_annot/"$kmer"mer_TS_hg38_highconf_gnomadupdate_chr${chroms}.starch \
+    | awk -v OFS='\t' -F'\t' -v wd=$window '{if ($4 >= wd*0.9) print $0}' \
+    | bedmap --delim '\t' --echo --count - \
+        <(zcat $outdir/af/annotations/$clean_annot/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz) \
+    | awk -v OFS='\t' -F'\t' -v g="$leftright_gap" '{print $1, $2+(g-5), $3-(g-5), $6, $5, $6-$5}' \
+    | starch - \
+    > $outdir/CDTS/annotations/$clean_annot/CDTS_diff_chr${chroms}.starch
+end=$(date +%s)
+runtime=$(((end-start)/60))
+echo "Placed tolerance score for $clean_annot and $chroms"
+echo "Took $runtime minutes"

@@ -122,7 +122,7 @@ generate_obsexpected() {
             | awk -v OFS='\t' -F'\t' -v wd=$window '{if ($4 >= wd*0.9) print $0}' \
             | bedmap --echo --count - <(zcat $1/af/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz) \
             | sed 's/|/\t/g' \
-            | awk -v OFS='\t' -F'\t' -v g="$leftright_gap" '{print $1, $2+g-5, $3-g-5, $6, $5, $6-$5}' \ #5 because we're always computing score for 10 bp
+            | awk -v OFS='\t' -F'\t' -v g="$leftright_gap" '{print $1, $2+(g-5), $3-(g-5), $6, $5, $6-$5}' \ #5 because we're always computing score for 10 bp
             | gzip - \
             > $1/CDTS/CDTS_diff_chr${chroms}.bed.gz &
         else

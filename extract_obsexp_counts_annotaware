@@ -1,0 +1,253 @@
+#!/bin/bash
+set -e
+set -o pipefail
+
+make_annot() {
+    annot_dir=$1
+    outdir=$2
+    start=$(date +%s)
+    for annotations in $annot_dir/*.starch; do
+        clean_annot=$(basename $annotations .starch)
+        mkdir -p $outdir/annotations/$clean_annot
+        while read -r chroms; do 
+            log "Splitting chr$chroms for $clean_annot"
+            if [ ! -s $outdir/annotations/$clean_annot/chr"$chroms".starch ]; then
+                unstarch "$chroms" $annotations \
+                    | starch - \
+                    > $outdir/annotations/$clean_annot/chr"$chroms".starch &
+            fi
+        done < $outdir/chromList.txt
+        wait
+        log "All annotations split for $clean_annot"
+    done
+    wait
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+generate_obsexp_annots() {
+    start=$(date +%s)
+    mkdir -p "$1"/"$2"mermetrics
+    echo -e "#!/bin/bash\nset -e\nset -o pipefail" > $3/annot_job_big
+    ctr=0
+    for annotations in $1/annotations/*; do
+        clean_annot=$(basename $annotations)
+        log "Analyzing $clean_annot"
+        mkdir -p "$1"/"$2"mermetrics/annotations/$clean_annot
+        mkdir -p "$1"/af/annotations/$clean_annot
+        for chroms in $(seq 1 22); do
+            log "Generating obs/exp. counts for chr$chroms"
+            if [ ! -s "$1"/"$2"mermetrics/annotations/$clean_annot/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_chr${chroms}.txt ]; then
+                echo "$3/annot_job $annotations $chroms $1 $2 $3 $clean_annot $4" >> $3/annot_job_big
+                ctr=$(($ctr+1))
+                #if (( $ctr % 1 == 0 )); then
+                if (( $ctr % 22 == 0 )); then
+                    #sbatch -p short -t 0-00:40 --mem=5G $3/annot_job_big
+                    sbatch -p short -t 0-02:00 --mem=16G $3/annot_job_big
+                    echo -e "#!/bin/bash\nset -e\nset -o pipefail" > $3/annot_job_big
+                    ctr=0
+                fi 
+            else
+                continue
+            fi
+        done
+    done
+    log "QUIT & WAIT FOR JOBS TO COMPLETE..."
+    #sleep 15
+    for annotations in $1/annotations/*; do
+        num_files=$(ls "$1"/"$2"mermetrics/annotations/$clean_annot | wc -l)
+        if [[ $num_files == 44 ]]; then
+            awk -v OFS='\t' -F'\t' '{print $1, 0}' $1/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt \
+                > $1/"$2"mermetrics/annotations/$clean_annot/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_autosomes.txt
+            awk -v OFS='\t' -F'\t' '{print $1, 0}' $1/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt \
+                > $1/"$2"mermetrics/annotations/$clean_annot/"$2"mer_highconf_gnomadupdate_hg38_autosomes.txt
+            for chroms in $(seq 1 22); do
+                paste $1/"$2"mermetrics/annotations/$clean_annot/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_autosomes.txt \
+                    $1/"$2"mermetrics/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_chr${chroms}.txt \
+                    | awk -v OFS='\t' -F'\t' '{if($1==$3){print $1, $2+$4}}' \
+                    > $1/"$2"mermetrics/annotations/$clean_annot/tmp.txt
+                mv $1/"$2"mermetrics/annotations/$clean_annot/tmp.txt \
+                    $1/"$2"mermetrics/annotations/$clean_annot/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_autosomes.txt
+
+                paste $1/"$2"mermetrics/annotations/$clean_annot/"$2"mer_highconf_gnomadupdate_hg38_autosomes.txt \
+                    $1/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt \
+                    | awk -v OFS='\t' -F'\t' '{if($1==$3){print $1, $2+$4}}' \
+                    > $1/"$2"mermetrics/annotations/$clean_annot/tmp2.txt
+                mv $1/"$2"mermetrics/annotations/$clean_annot/tmp2.txt \
+                    $1/"$2"mermetrics/annotations/$clean_annot/"$2"mer_highconf_gnomadupdate_hg38_autosomes.txt
+            done
+        fi
+        num_files=$(ls "$1"/"$2"mermetrics/annotations/$clean_annot | wc -l)
+        if [[ ! -d $1/"$2"mermetrics/annotations/$clean_annot/Dico && $num_files == 46 ]]; then
+            mkdir -p $1/"$2"mermetrics/annotations/$clean_annot/Dico 
+            paste $1/"$2"mermetrics/annotations/$clean_annot/"$2"mer_highconf_gnomadupdate_hg38_autosomes.txt \
+                $1/"$2"mermetrics/annotations/$clean_annot/"$2"mer_variation_afabovethreshold_highconf_gnomadupdate_hg38_autosomes.txt \
+                | awk -v OFS='\t' -F'\t' '{if ($1==$3) print $1, $4/$2}' \
+                > $1/"$2"mermetrics/annotations/$clean_annot/Dico/TS_autosomes.txt
+        fi
+    done
+}
+
+place_tolerance_score_annotaware() {
+    start=$(date +%s)
+    log "Placing Tolerance Score"
+    annotdir=$1/annotations
+    for annots in $annotdir/*; do
+        clean_annot=$(basename $annots)
+        mkdir -p $1/genome/annotations/$clean_annot
+        log "Placing Tolerance Score for $clean_annot"
+        for chroms in $(seq 1 22)
+        do
+            unstarch --list $1/genome/annotations/$clean_annot/"$2"mer_TS_hg38_highconf_gnomadupdate_chr"$chroms".starch &> /dev/null
+            prev_status=$?
+            [ $prev_status == 1 ] && \
+                sbatch -p short -t 0-00:30 --mem=3G $3/placetolscore_annot_job $1 $2 $chroms $annots $3 $clean_annot 
+        done
+    done
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+generate_obsexpected() {
+    start=$(date +%s)
+    log "Generating window"
+    mkdir -p $1/CDTS/annotations
+    sliding=$3
+    window=$4
+    leftright_gap=$(($window/2))
+    annotdir=$1/annotations
+    ctr=0
+    
+    echo -e "#!/bin/bash\nset -e\nset -o pipefail" > $5/getandmerge_annot_job_big
+    for annots in $annotdir/*; do
+        clean_annot=$(basename $annots)
+        log "Computing expected for annotation $clean_annot"
+        mkdir -p $1/CDTS/annotations/$clean_annot
+        for chroms in $(seq 1 22); do
+            unstarch --list $1/CDTS/annotations/$clean_annot/CDTS_diff_chr${chroms}.starch &> /dev/null
+            prev_status=$?
+            if [ $prev_status == 1 ]; then \
+            #if [ ! -s $1/CDTS/annotations/$clean_annot/CDTS_diff_chr${chroms}.starch ]; then
+                echo "$5/getandmergescore_annot_job $1 $2 $chroms $sliding $window $clean_annot" >> $5/getandmerge_annot_job_big
+                ctr=$(($ctr+1))
+                #if (( $ctr % 1 == 0 )); then
+                if (( $ctr % 22 == 0 )); then
+                    sbatch -p short -t 0-04:00 --mem=5G $5/getandmerge_annot_job_big
+                    #sbatch -p short -t 0-00:25 --mem=500M $5/getandmerge_annot_job_big
+                    echo -e "#!/bin/bash\nset -e\nset -o pipefail" > $5/getandmerge_annot_job_big
+                    ctr=0
+                fi
+            fi
+        done
+    done
+    rm $5/getandmerge_annot_job_big
+    exit
+
+    log "Assuming all jobs have completed..."
+    sleep 3
+    mkdir -p $1/CDTS/CDTS_diff_annots
+    for chroms in $(seq 1 22); do
+        [ ! -s $1/CDTS/CDTS_diff_annots/CDTS_diff_chr${chroms}.bed ] &&
+            sbatch -p short -t 0-10:00 --mem=10G $5/merge_annot_cdts_job $1 $chroms $5
+    done
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+create_percentile_bins() {
+    start=$(date +%s)
+    log "Creating percentile bins"
+    nb=$(($(cat $1/CDTS/CDTS_diff_annots/CDTS_diff_chr*.bed | wc -l)/100))
+    mkdir -p $1/CDTS/split/diff
+    [ ! -s $1/CDTS/split/genome_CDTS.bed ] && cat $1/CDTS/CDTS_diff_annots/CDTS_diff_chr*.bed > $1/CDTS/split/genome_CDTS.bed
+    sort -k4,4g --temporary-directory=$1/CDTS/split/diff $1/CDTS/split/genome_CDTS.bed \
+        | split -l $nb --numeric-suffixes=1 --suffix-length=3 - $1/CDTS/split/diff/CDTS_diff_perc.bed.
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+log() {
+    lcol='\033[1;33m' lcol2='\033[1;36m' lclr='\033[m'
+    printf '%b%s %b%s%b %s\n' \
+        "$lcol" "${3:-->}" "${lclr}${2:+$lcol2}" "$1" "$lclr" "$2" >&2
+}
+
+die() {
+    log "$1" "$2" "${3:-ERROR}"
+    exit 2
+}
+
+main() {
+    OUTDIR=""
+    KMER=7
+    WD="."
+    ANNOTDIR=""
+    AFTH=0.0001
+    AFTHX=0.000075
+    SLIDING=10
+    WINDOW=550
+    for i in "$@"; do
+    case $i in
+        -o|--outdir)
+        OUTDIR="$2"
+        shift
+        shift
+        ;;
+        -w|--working)
+        WD="$2"
+        shift
+        shift
+        ;;
+        -k|--kmer)
+        KMER="$2"
+        shift
+        shift
+        ;;
+        -a|--annotations)
+        ANNOTDIR="$2"
+        shift
+        shift
+        ;;
+        -a|--allelefreqthresh)
+        AFTH="$2"
+        shift
+        shift
+        ;;
+        -s|--sliding)
+        SLIDING="$2"
+        shift
+        shift
+        ;;
+        -wi|--window)
+        WINDOW="$2"
+        shift
+        shift
+        ;;
+        -h|--help)
+        usage
+        exit
+        ;;
+        *)
+        ;;
+    esac
+    done
+    log "Splitting annotations" "..." "STEP XA"
+    make_annot $ANNOTDIR $OUTDIR && log "SUCCESSFUL" "Annotations successfully split" "STEP XA" || die "Step XA failed"
+    
+    log "Obs Expected being computed" "..." "STEP XB"
+    generate_obsexp_annots $OUTDIR $KMER $WD $AFTH && log "SUCCESSFUL" "Obs expected computed" "STEP XB" || die "Step XB failed"
+    
+    log "Calculating tolerance score for annotations" "..." "STEP XC"
+    place_tolerance_score_annotaware $OUTDIR $KMER $WD && log "SUCCESSFUL" "Tolerance score calculated" "STEP XC" || die "Step XC failed"
+
+    log "Merging obs and expected across annotations" "..." "STEP XD"
+    generate_obsexpected $OUTDIR $KMER $SLIDING $WINDOW $WD && log "SUCCESSFUL" "Annotation info. merged" "STEP XD" || die "Step XD failed"
+    
+    log "Create percentile bins" "..." "STEP XE"
+    create_percentile_bins $OUTDIR && log "SUCCESSFUL" "Percentile bins created" "STEP XE" || die "Step XE failed"
+}
+main "$@"
