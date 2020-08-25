@@ -104,6 +104,8 @@ main() {
     done
     [ -z $OUTDIR ] && die "No output directory specified!"
     [ -z $DOWNLOADDIR ] && { log "No download directory specified... using output directory!"; DOWNLOADDIR="$OUTDIR"; }
+    mkdir -p $OUTDIR
+    mkdir -p $DOWNLOADDIR
     seq 1 22 | cat - <(echo "X") > $OUTDIR/chromList.txt
     log "Downloading gnomAD" "..." "STEP 1"
     dl_gnomad $DOWNLOADDIR

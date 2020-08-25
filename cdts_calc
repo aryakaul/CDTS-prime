@@ -110,7 +110,7 @@ generate_obsexpected() {
     mkdir -p $1/CDTS
     window=$3
     sliding=$4
-    leftright_gap=$(($window/2))
+    leftright_gap=$((($window/2) - 5))
     while read -r chroms; do
         bluntchr=`echo $chroms | sed -e 's/PAR//g' -e 's/not//g'`
         log "Computing expected for chrom $chroms"
@@ -122,7 +122,7 @@ generate_obsexpected() {
             | awk -v OFS='\t' -F'\t' -v wd=$window '{if ($4 >= wd*0.9) print $0}' \
             | bedmap --echo --count - <(zcat $1/af/gnomad_PASS_SNV_chr${chroms}_afabovethreshold_highconf.bed.gz) \
             | sed 's/|/\t/g' \
-            | awk -v OFS='\t' -F'\t' -v g="$leftright_gap" '{print $1, $2+g-5, $3-g-5, $6, $5, $6-$5}' \
+            | awk -v OFS='\t' -F'\t' -v g="$leftright_gap" '{print $1, $2+g, $3-g, $6, $5, $6-$5}' \
             | gzip - \
             > $1/CDTS/CDTS_diff_chr${chroms}.bed.gz &
         else
@@ -249,6 +249,7 @@ main() {
     
     log "Create percentile bins" "..." "STEP 4D"
     create_percentile_bins $OUTDIR && log "SUCCESSFUL" "Percentile bins created" "STEP 4D" || die "Step 4D failed"
+    exit
     
     log "Merge all bins" "..." "STEP 4E"
     merge $OUTDIR && log "SUCCESSFUL" "Bins merged" "STEP 4E" || die "Step 4E failed"
