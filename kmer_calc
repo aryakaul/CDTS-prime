@@ -1,10 +1,11 @@
 #!/bin/bash
 set -e
 
-get_kmer() {
+get_kmer_specific() {
     start=$(date +%s)
     log "Downloading hg38 reference"
     mkdir -p $1/genome
+    CHOICE=$3
     wget -q -N -P $1/genome "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chrom.sizes"
     cat $1/genome/hg38.chrom.sizes | head -24 | sed 's/^chr//g' > $1/genome/chrLength_hg38.txt
     if [ ! -f $1/genome/hg38_reference.fasta ]; then
@@ -39,21 +40,22 @@ get_kmer() {
     runtime=$(((end-start)/60))
     log "Time Taken" "$runtime minutes"
 
+    mkdir -p $1/genome/$CHOICE
     log "Remove everything that didn't pass QC and update reference nucleotide where it differs from hg38"
     for chroms in $(seq 1 22); do
         log "Filtering chrom $chroms"
-        if [ ! -f $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chr"$chroms".bed.gz ]; then
+        if [ ! -f $1/genome/$CHOICE/"$2"mer_hg38_highconf_gnomadupdate_chr"$chroms".bed.gz ]; then
             bedmap --echo --skip-unmapped <(zcat $1/genome/"$2"mer_hg38_chr${chroms}_noN.bed.gz) \
-                $1/qc/confidentRegions_nolowcov_nohighmissingness_hg38_autosomesAndPAR.starch \
+                $1/qc/$CHOICE/confidentRegions_nolowcov_nohighmissingness_hg38_autosomesAndPAR.starch \
             | bedmap --echo --echo-map-id --echo-map-score - \
-                $1/af/gnomad_PASS_SNV_chr${chroms}_af_highconf_wrongref_idx_newref.starch \
+                $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_af_highconf_wrongref_idx_newref.starch \
             | sed -e 's/||$//' -e 's/|/\t/g' \
             | awk -v OFS='\t' -F'\t' '{if (NF==4) print $0; \
                 else {split($4,seq,""); split($5,ref,";"); split($6,idx,";"); \
                 for (i=1;i<=length(idx);i++) seq[int(idx[i])]=ref[i]; \
                 print $1, $2, $3, seq[1]seq[2]seq[3]seq[4]seq[5]seq[6]seq[7]}}' \
             | gzip - \
-            > $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chr"$chroms".bed.gz &
+            > $1/genome/$CHOICE/"$2"mer_hg38_highconf_gnomadupdate_chr"$chroms".bed.gz &
         else
             continue
         fi
@@ -61,60 +63,61 @@ get_kmer() {
     wait
 
     log "Filtering XPAR"
-    if [ ! -f $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chrXPAR.bed.gz ]; then 
-        bedmap --echo --skip-unmapped <(zcat $1/genome/"$2"mer_hg38_chrX_noN.bed.gz) $1/qc/confidentRegions_nolowcov_nohighmissingness_hg38_autosomesAndPAR.starch \
+    if [ ! -f $1/genome/$CHOICE/"$2"mer_hg38_highconf_gnomadupdate_chrXPAR.bed.gz ]; then 
+        bedmap --echo --skip-unmapped <(zcat $1/genome/"$2"mer_hg38_chrX_noN.bed.gz) $1/qc/$CHOICE/confidentRegions_nolowcov_nohighmissingness_hg38_autosomesAndPAR.starch \
         | bedmap --echo --echo-map-id --echo-map-score - \
-            $1/af/gnomad_PASS_SNV_chrXPAR_af_highconf_wrongref_idx_newref.starch \
+            $1/af/$CHOICE/gnomad_PASS_SNV_chrXPAR_af_highconf_wrongref_idx_newref.starch \
         | sed -e 's/||$//' -e 's/|/\t/g' \
         | awk -v OFS='\t' -F'\t' '{if (NF==4) print $0; \
             else {split($4,seq,""); split($5,ref,";"); split($6,idx,";"); \
             for (i=1;i<=length(idx);i++) seq[int(idx[i])]=ref[i]; \
             print $1, $2, $3, seq[1]seq[2]seq[3]seq[4]seq[5]seq[6]seq[7]}}' \
         | gzip - \
-        > $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chrXPAR.bed.gz
+        > $1/genome/$CHOICE/"$2"mer_hg38_highconf_gnomadupdate_chrXPAR.bed.gz
     fi
     
     log "Filtering notXPAR"
     if [ ! -f $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chrXnotPAR.bed.gz ]; then 
-        bedmap --echo --skip-unmapped <(zcat $1/genome/"$2"mer_hg38_chrX_noN.bed.gz) $1/qc/confidentRegions_nolowcov_nohighmissingness_hg38_chrXnotPAR.starch \
-        | bedmap --echo --echo-map-id --echo-map-score - $1/af/gnomad_PASS_SNV_chrXnotPAR_af_highconf_wrongref_idx_newref.starch \
+        bedmap --echo --skip-unmapped <(zcat $1/genome/"$2"mer_hg38_chrX_noN.bed.gz) $1/qc/$CHOICE/confidentRegions_nolowcov_nohighmissingness_hg38_chrXnotPAR.starch \
+        | bedmap --echo --echo-map-id --echo-map-score - $1/af/$CHOICE/gnomad_PASS_SNV_chrXnotPAR_af_highconf_wrongref_idx_newref.starch \
         | sed -e 's/||$//' -e 's/|/\t/g' \
         | awk -v OFS='\t' -F'\t' '{if (NF==4) print $0; \
             else {split($4,seq,""); split($5,ref,";"); split($6,idx,";"); \
                 for (i=1;i<=length(idx);i++) seq[int(idx[i])]=ref[i]; \
                     print $1, $2, $3, seq[1]seq[2]seq[3]seq[4]seq[5]seq[6]seq[7]}}' \
         | gzip - \
-        > $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chrXnotPAR.bed.gz
+        > $1/genome/$CHOICE/"$2"mer_hg38_highconf_gnomadupdate_chrXnotPAR.bed.gz
     fi
     end=$(date +%s)
     runtime=$(((end-start)/60))
     log "Time Taken" "$runtime minutes"
 }
 
-extract_kmer_counts() {
+extract_kmer_counts_specific() {
     start=$(date +%s)
-    mkdir -p "$1"/"$2"mermetrics
+    CHOICE=$4
+    mkdir -p "$1"/"$2"mermetrics/$CHOICE
     while read -r chroms; do
         log "Extracting kmer counts for chr$chroms"
-        if [ ! -s "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt ]
+        if [ ! -s "$1"/"$2"mermetrics/$CHOICE/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt ]
         then
-            zcat $1/genome/"$2"mer_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz \
+            zcat $1/genome/$CHOICE/"$2"mer_hg38_highconf_gnomadupdate_chr${chroms}.bed.gz \
                 | cut -f 4 \
                 | python $3/countkmer.py 1 $2 \
-                > "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt &
+                > "$1"/"$2"mermetrics/$CHOICE/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt &
         else
             continue
         fi
     done < $1/chromList_PARsplit.txt
     wait
 
-    cp "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_chrXPAR.txt \
-        "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt
+    cp "$1"/"$2"mermetrics/$CHOICE/"$2"mer_highconf_gnomadupdate_hg38_chrXPAR.txt \
+        "$1"/"$2"mermetrics/$CHOICE/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt
     for chroms in `seq 1 22`; do
-        paste "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt \
-         "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt | \
+        paste "$1"/"$2"mermetrics/$CHOICE/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt \
+         "$1"/"$2"mermetrics/$CHOICE/"$2"mer_highconf_gnomadupdate_hg38_chr${chroms}.txt | \
             awk -v OFS='\t' -F'\t' '{if ($1==$3) print $1, $2+$4}' > $1/tmp.txt
-        mv $1/tmp.txt "$1"/"$2"mermetrics/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt
+        mv $1/tmp.txt "$1"/"$2"mermetrics/$CHOICE/"$2"mer_highconf_gnomadupdate_hg38_autosomesAndPAR.txt
     done
     end=$(date +%s)
     runtime=$(((end-start)/60))
@@ -136,6 +139,7 @@ main() {
     OUTDIR=""
     KMER=7
     WD="."
+    OPTIONS="male female"
     for i in "$@"; do
     case $i in
         -o|--outdir)
@@ -153,6 +157,11 @@ main() {
         shift
         shift
         ;;
+        -ch|--choice)
+        OPTIONS="$2"
+        shift
+        shift
+        ;;
         -h|--help)
         usage
         exit
@@ -166,10 +175,15 @@ main() {
     [[ $(($KMER%2)) == 0 ]] && die "Kmer value selected is not odd!" 
     
     log "Computing kmers for each position" "..." "STEP 3A"
-    get_kmer $OUTDIR $KMER && log "SUCCESSFUL" "Kmer computed for each position" "STEP 3A" || die "Step 3A failed"
+    for CHOICE in $OPTIONS; do 
+        get_kmer_specific $OUTDIR $KMER $CHOICE && log "SUCCESSFUL" "Kmer computed for each position" "STEP 3A" || die "Step 3A failed"
+    done
+    
     
     log "Extract kmer metrics" "..." "STEP 3B"
-    extract_kmer_counts $OUTDIR $KMER $WD && log "SUCCESSFUL" "Kmer metrics computed" "STEP 3B" || die "Step 3B failed"
+    for CHOICE in $OPTIONS; do 
+        extract_kmer_counts_specific $OUTDIR $KMER $WD $CHOICE && log "SUCCESSFUL" "Kmer metrics computed" "STEP 3B" || die "Step 3B failed"
+    done
 }
 
 main "$@"

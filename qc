@@ -80,6 +80,7 @@ find_passing_snvs() {
     while read -r chroms; do
         log "Filtering chrom $chroms"
         if [ ! -s $1/af/gnomad_PASS_SNV_chr${chroms}_af.starch ]; then
+            # changing this to something more agnostic is prefereable
             tabix $2/vcf/gnomad.genomes.r3.0.sites.chr${chroms}.vcf.bgz chr${chroms} \
                 | sed 's/^chr//g' \
                 | awk -v OFS='\t' -F'\t' '{if ($7=="PASS" && length($4)==1 && \
@@ -100,17 +101,50 @@ find_passing_snvs() {
     log "Time Taken" "$runtime minutes"
 }
 
-find_high_missingness() {
+find_passing_snvs_specific() {
     start=$(date +%s)
+    CHOICE=$4
+    mkdir -p $1/af/$CHOICE
+    while read -r chroms; do
+        if [ ! -s $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_af.starch ]; then
+            log "Filtering chrom $chroms for $CHOICE"
+            # changing this to something more agnostic is prefereable
+            tabix $2/vcf/gnomad.genomes.r3.0.sites.chr${chroms}.vcf.bgz chr${chroms} \
+                | sed 's/^chr//g' \
+                | awk -v OFS='\t' -F'\t' '{if ($7=="PASS" && length($4)==1 && \
+                (length($5)==1 || (length($5)==3 && $5~",") || (length($5)==5 && $5~",.,"))) print $1, $2-1, $2, $4, $5, $8}' \
+                | sed -e "s/;AC_$CHOICE=/\t/" -e "s/;AF_$CHOICE=/\t/" -e "s/;AN_$CHOICE=/\t/" \
+                | awk -v OFS='\t' '{print $1, $2, $3, $4, $5, $7, $8, $9}' \
+                | sed -e 's/;.*//' \
+                | awk '{if ($6!=0){print $0}}' \
+                | awk -v OFS='\t' -F'\t' '{split($5,alt,","); split($6,ac,","); split($8,af,","); \
+                    for (i=1;i<=length(alt);i++) print $1, $2, $3, $4, alt[i], ac[i], af[i], $7}' \
+                | awk -F'\t' -v OFS='\t' '{if(NF==8){print $0}}' \
+                | python $3/reformat_ACAFAN_1linePerPos_addFlags.py \
+                | starch - \
+                > $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_af.starch &
+        else
+            log "  Already filtered... skipping."
+        fi
+    done < $1/chromList.txt
+    wait
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+find_high_missingness_specific() {
+    start=$(date +%s)
+    CHOICE=$2
     nball=1000
     while read -r chroms; do
         log "Filtering chrom $chroms"
-        if [ ! -s $1/af/gnomad_PASS_SNV_chr${chroms}_high_missingness.starch ]; then
-            unstarch $1/af/gnomad_PASS_SNV_chr${chroms}_af.starch \
+        if [ ! -s $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_high_missingness.starch ]; then
+            unstarch $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_af.starch \
                 | awk -v OFS='\t' -F'\t' -v nb=$nball '{if($13 < nb) {print $1,$2,$3}}' \
                 | bedops -m - \
                 | starch - \
-                > $1/af/gnomad_PASS_SNV_chr${chroms}_high_missingness.starch &
+                > $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_high_missingness.starch &
         else
             log "  Already filtered... skipping."
         fi
@@ -118,30 +152,31 @@ find_high_missingness() {
     wait
 
     log "Splitting into pseudoautosomal regions and nonPAR"
-    [ ! -s $1/af/gnomad_PASS_SNV_chrXPAR_high_missingness.starch ] &&
-        bedops --intersect $1/af/gnomad_PASS_SNV_chrX_high_missingness.starch $1/PAR_hg38.bed \
+    [ ! -s $1/af/$CHOICE/gnomad_PASS_SNV_chrXPAR_high_missingness.starch ] &&
+        bedops --intersect $1/af/$CHOICE/gnomad_PASS_SNV_chrX_high_missingness.starch $1/PAR_hg38.bed \
             | starch - \
-            > $1/af/gnomad_PASS_SNV_chrXPAR_high_missingness.starch
+            > $1/af/$CHOICE/gnomad_PASS_SNV_chrXPAR_high_missingness.starch
     
-    [ ! -s $1/af/gnomad_PASS_SNV_chrXnotPAR_high_missingness.starch ] &&
-        bedops --intersect $1/af/gnomad_PASS_SNV_chrX_high_missingness.starch $1/chrXnotPAR_hg38.bed \
+    [ ! -s $1/af/$CHOICE/gnomad_PASS_SNV_chrXnotPAR_high_missingness.starch ] &&
+        bedops --intersect $1/af/$CHOICE/gnomad_PASS_SNV_chrX_high_missingness.starch $1/chrXnotPAR_hg38.bed \
             | starch - \
-            > $1/af/gnomad_PASS_SNV_chrXnotPAR_high_missingness.starch
+            > $1/af/$CHOICE/gnomad_PASS_SNV_chrXnotPAR_high_missingness.starch
 
-    [ ! -s $1/af/gnomad_PASS_SNV_autosomesAndPAR_high_missingness.starch ] &&
-        starchcat $1/af/gnomad_PASS_SNV_chr[1-9]*_high_missingness.starch $1/af/gnomad_PASS_SNV_chrXPAR_high_missingness.starch \
-            > $1/af/gnomad_PASS_SNV_autosomesAndPAR_high_missingness.starch 
+    [ ! -s $1/af/$CHOICE/gnomad_PASS_SNV_autosomesAndPAR_high_missingness.starch ] &&
+        starchcat $1/af/$CHOICE/gnomad_PASS_SNV_chr[1-9]*_high_missingness.starch $1/af/$CHOICE/gnomad_PASS_SNV_chrXPAR_high_missingness.starch \
+            > $1/af/$CHOICE/gnomad_PASS_SNV_autosomesAndPAR_high_missingness.starch 
 
     log "Removing positions with high missingness"
-    [ ! -s $1/qc/confidentRegions_nolowcov_nohighmissingness_hg38_autosomesAndPAR.starch ] &&
-        bedops --difference $1/qc/confidentRegions_nolowcov_hg38_autosomesAndPAR.starch $1/af/gnomad_PASS_SNV_autosomesAndPAR_high_missingness.starch \
+    mkdir -p $1/qc/$CHOICE
+    [ ! -s $1/qc/$CHOICE/confidentRegions_nolowcov_nohighmissingness_hg38_autosomesAndPAR.starch ] &&
+        bedops --difference $1/qc/confidentRegions_nolowcov_hg38_autosomesAndPAR.starch $1/af/$CHOICE/gnomad_PASS_SNV_autosomesAndPAR_high_missingness.starch \
         | starch - \
-        > $1/qc/confidentRegions_nolowcov_nohighmissingness_hg38_autosomesAndPAR.starch 
+        > $1/qc/$CHOICE/confidentRegions_nolowcov_nohighmissingness_hg38_autosomesAndPAR.starch 
     
-    [ ! -s $1/qc/confidentRegions_nolowcov_nohighmissingness_hg38_chrXnotPAR.starch ] &&
-        bedops --difference $1/qc/confidentRegions_nolowcov_hg38_chrXnotPAR.starch $1/af/gnomad_PASS_SNV_chrXnotPAR_high_missingness.starch \
+    [ ! -s $1/qc/$CHOICE/confidentRegions_nolowcov_nohighmissingness_hg38_chrXnotPAR.starch ] &&
+        bedops --difference $1/qc/confidentRegions_nolowcov_hg38_chrXnotPAR.starch $1/af/$CHOICE/gnomad_PASS_SNV_chrXnotPAR_high_missingness.starch \
         | starch - \
-        > $1/qc/confidentRegions_nolowcov_nohighmissingness_hg38_chrXnotPAR.starch
+        > $1/qc/$CHOICE/confidentRegions_nolowcov_nohighmissingness_hg38_chrXnotPAR.starch
     
     end=$(date +%s)
     runtime=$(((end-start)/60))
@@ -178,13 +213,45 @@ extract_snvs() {
     log "Time Taken" "$runtime minutes"
 }
 
-update_allele() {
+extract_snvs_specific() {
     start=$(date +%s)
+    CHOICE=$2
+    while read -r chroms; do
+        log "Extracting chrom $chroms"
+        if [ ! -s $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_af_highconf.starch ]; then
+            bedmap --echo --skip-unmapped $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_af.starch $1/qc/$CHOICE/confidentRegions_nolowcov_nohighmissingness_hg38_autosomesAndPAR.starch \
+            | starch - \
+            > $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_af_highconf.starch &
+        else
+            log "  Already downloaded... skipping."
+        fi
+    done < $1/chromList.txt
+    wait
+   
+    log "Recomputing for autosomal regions and non-PAR regions"
+    [ ! -s $1/af/$CHOICE/gnomad_PASS_SNV_chrXPAR_af_highconf.starch ] &&
+        bedmap --echo --skip-unmapped $1/af/$CHOICE/gnomad_PASS_SNV_chrX_af.starch $1/qc/$CHOICE/confidentRegions_nolowcov_nohighmissingness_hg38_autosomesAndPAR.starch \
+        | starch - \
+        > $1/af/$CHOICE/gnomad_PASS_SNV_chrXPAR_af_highconf.starch 
+    
+    [ ! -s $1/af/$CHOICE/gnomad_PASS_SNV_chrXnotPAR_af_highconf.starch ] &&
+        bedmap --echo --skip-unmapped $1/af/$CHOICE/gnomad_PASS_SNV_chrX_af.starch $1/qc/$CHOICE/confidentRegions_nolowcov_nohighmissingness_hg38_chrXnotPAR.starch \
+        | starch - \
+        > $1/af/$CHOICE/gnomad_PASS_SNV_chrXnotPAR_af_highconf.starch 
+    
+    end=$(date +%s)
+    runtime=$(((end-start)/60))
+    log "Time Taken" "$runtime minutes"
+}
+
+update_allele_specific() {
+    start=$(date +%s)
+    CHOICE=$2
     seq 1 22 | cat - <(echo -e "XPAR\nXnotPAR") > $1/chromList_PARsplit.txt
     while read -r chroms; do
         log "Extracting chrom $chroms"
-        if [ ! -s $1/af/gnomad_PASS_SNV_chr${chroms}_af_highconf_wrongref_idx_newref.starch ]; then
-            unstarch $1/af/gnomad_PASS_SNV_chr${chroms}_af_highconf.starch \
+        if [ ! -s $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_af_highconf_wrongref_idx_newref.starch ]; then
+            unstarch $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_af_highconf.starch \
                 | awk -v OFS='\t' -F'\t' '{if($4 != $10){ \
                 printf "%s\t%s\t%s\t%s\t%s\n", $1, $2-3, $2-2, $10, 1; \
                 printf "%s\t%s\t%s\t%s\t%s\n", $1, $2-2, $2-1, $10, 2; \
@@ -195,7 +262,7 @@ update_allele() {
                 printf "%s\t%s\t%s\t%s\t%s\n", $1, $3+2, $3+3, $10, 7;}}' \
                 | sort-bed - \
                 | starch - \
-                > $1/af/gnomad_PASS_SNV_chr${chroms}_af_highconf_wrongref_idx_newref.starch &
+                > $1/af/$CHOICE/gnomad_PASS_SNV_chr${chroms}_af_highconf_wrongref_idx_newref.starch &
         else
             log "  Already extracted... skipping."
         fi
@@ -221,6 +288,7 @@ main() {
     OUTDIR=""
     COVERAGE=0.033
     WD="."
+    OPTIONS="male female"
     for i in "$@"; do
     case $i in
         -o|--outdir)
@@ -243,6 +311,11 @@ main() {
         shift
         shift
         ;;
+        -ch|--choice)
+        OPTIONS="$2"
+        shift
+        shift
+        ;;
         -h|--help)
         usage
         exit
@@ -256,18 +329,26 @@ main() {
     
     log "Computing high-confidence, low coverage regions." "..." "STEP 2A"
     extract_highconf_lowcov_regions $OUTDIR $GNOMADDIR $COVERAGE && log "SUCCESSFUL" "High Confident, Low Coverage Starch files generated" "STEP 2A" || die "Step 2A failed"
-   
-    log "Computing SNVs that pass filters" "..." "STEP 2B"
-    find_passing_snvs $OUTDIR $GNOMADDIR $WD && log "SUCCESSFUL" "SNVs filtered" "STEP 2B" || die "Step 2B failed"
+  
+    for CHOICE in $OPTIONS; do
+        log "Computing SNVs that pass filters for $CHOICE" "..." "STEP 2B"
+        find_passing_snvs_specific $OUTDIR $GNOMADDIR $WD $CHOICE && log "SUCCESSFUL" "SNVs filtered" "STEP 2B" || die "Step 2B failed"
+    done
 
     log "Computing SNVs that are present in more than 1000 alleles" "..." "STEP 2C"
-    find_high_missingness $OUTDIR && log "SUCCESSFUL" "SNVs filtered" "STEP 2C" || die "Step 2C failed"
+    for CHOICE in $OPTIONS; do 
+        find_high_missingness_specific $OUTDIR $CHOICE && log "SUCCESSFUL" "SNVs filtered" "STEP 2C" || die "Step 2C failed"
+    done
 
     log "Extract SNVs in high confidence, high coverage regions" "..." "STEP 2D"
-    extract_snvs $OUTDIR && log "SUCCESSFUL" "SNVs filtered" "STEP 2D" || die "Step 2D failed"
+    for CHOICE in $OPTIONS; do 
+        extract_snvs_specific $OUTDIR $CHOICE && log "SUCCESSFUL" "SNVs filtered" "STEP 2D" || die "Step 2D failed"
+    done
     
     log "Updating hg38 reference allele" "..." "STEP 2E"
-    update_allele $OUTDIR && log "SUCCESSFUL" "Reference updated." "STEP 2E" || die "Step 2E failed"
+    for CHOICE in $OPTIONS; do 
+        update_allele_specific $OUTDIR $CHOICE && log "SUCCESSFUL" "Reference updated." "STEP 2E" || die "Step 2E failed"
+    done
     
     log "QC Complete" "..." "STEP 2"
     
