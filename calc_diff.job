@@ -3,9 +3,11 @@
 source /n/app/conda2/etc/profile.d/conda.sh
 conda activate mutts
 
-CDTS_female="/n/scratch3/users/a/ak586/output/sex-specific/CDTS/female/split/genome_CDTS.bed"
-CDTS_male="/n/scratch3/users/a/ak586/output/sex-specific/CDTS/male/split/genome_CDTS.bed"
+CDTS_female="/n/groups/price/arya/sex-specific/sexspecific_workflow/CDTS/female/split/genome_CDTS.bed"
+CDTS_male="/n/groups/price/arya/sex-specific/sexspecific_workflow/CDTS/male/split/genome_CDTS.bed"
+sexdiff="/n/groups/price/arya/sex-specific/sexspecific_workflow/CDTS/CDTS_sexdiff.bed"
+sorted_sexdiff="/n/groups/price/arya/sex-specific/sexspecific_workflow/CDTS/CDTS_sexdiff.sorted.bed"
 
-sort-bed <(awk -v OFS='\t' '{print $1,$2,$3,$6,"FEMALE"}' $CDTS_female) <(awk -v OFS='\t' '{print $1,$2,$3,$6,"MALE"}' $CDTS_male) | python calc_diff.py > "/n/scratch3/users/a/ak586/output/sex-specific/CDTS_sexdiff.bed"
+sort-bed <(awk -v OFS='\t' '{print $1,$2,$3,$6,"FEMALE"}' $CDTS_female) <(awk -v OFS='\t' '{print $1,$2,$3,$6,"MALE"}' $CDTS_male) | python calc_diff.py > $sexdiff
 
-sort -k4,4n "/n/scratch3/users/a/ak586/output/sex-specific/CDTS_sexdiff.bed"
+sort -k4,4n $sexdiff > $sorted_sexdiff
